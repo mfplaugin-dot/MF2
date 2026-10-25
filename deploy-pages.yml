@@ -1,0 +1,69 @@
+name: Deploy website to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/web/**"
+      - ".github/workflows/deploy-pages.yml"
+      - "DEPLOYMENT.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/web/package-lock.json
+      - name: Require the production API origin
+        env:
+          API_ORIGIN: ${{ vars.API_ORIGIN }}
+        run: |
+          if [ -z "$API_ORIGIN" ]; then
+            echo "::error::Set the repository Actions variable API_ORIGIN to the HTTPS Azure API custom-domain origin before deploying."
+            exit 1
+          fi
+          API_ORIGIN="$API_ORIGIN" node -e '
+            const value = process.env.API_ORIGIN;
+            let api;
+            try { api = new URL(value); } catch {}
+            if (!api || api.protocol !== "https:" || api.origin !== value.replace(/\/+$/, "") ||
+                api.pathname !== "/" || api.search || api.hash || api.username || api.password) {
+              console.error("::error::API_ORIGIN must be an HTTPS origin only, without a path, query, or credentials.");
+              process.exit(1);
+            }
+          '
+      - name: Install and build
+        working-directory: services/web
+        env:
+          VITE_API_ORIGIN: ${{ vars.API_ORIGIN }}
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: services/web/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
